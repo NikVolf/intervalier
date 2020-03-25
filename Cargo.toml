@@ -3,6 +3,11 @@ name = "intervalier"
 version = "0.1.0"
 authors = ["Nikolay Volf <nikvolf@gmail.com>"]
 edition = "2018"
+description = "Interval events with handling notifications"
+repository = "https://github.com/nikvolf/intrvallier"
+homepage = "https://github.com/nikvolf/intrvallier"
+license-file = "LICENSE"
+keywords = ["futures", "timer", "async"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
