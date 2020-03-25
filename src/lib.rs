@@ -94,7 +94,7 @@ mod tests {
     use futures::channel::oneshot;
     use std::sync::{Arc, atomic::{AtomicBool, Ordering as AtomicOrdering}};
 
-    async fn run_test<R: Rythm>(rythm: R, exit: oneshot::Receiver<()>, change_this: Arc<AtomicBool>) {
+    async fn run_test<R: IntoStream>(rythm: R, exit: oneshot::Receiver<()>, change_this: Arc<AtomicBool>) {
         let interval = rythm.into_stream().fuse();
         let exit = exit.fuse();
         futures::pin_mut!(interval, exit);
