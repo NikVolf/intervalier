@@ -160,6 +160,7 @@ mod tests {
         loop {
             futures::select! {
                 _ = interval.next() => {
+                    futures_timer::Delay::new(Duration::from_millis(100)).await;
                     change_this.store(true, AtomicOrdering::SeqCst);
                 },
                 _ = exit => {
