@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{time::Duration, pin::Pin, task::{Poll, Context}};
 use futures::{prelude::*, channel::mpsc, stream::unfold};
 use futures_timer::Delay;
 
@@ -49,7 +49,7 @@ impl Drop for BackSignalGuard {
     }
 }
 
-/// Interval that produces stream of "guarded" events.Duration
+/// Interval that produces stream of "guarded" events.
 ///
 /// Each time when such guarded event handled (dropped), event for the
 /// receiver is generated.
@@ -84,6 +84,65 @@ impl BackSignalInterval {
             sender: sender,
         };
         (back_signal, receiver)
+    }
+}
+
+pub struct ManualSignalInterval {
+    event_receiver: mpsc::UnboundedReceiver<()>,
+    handle_sender: mpsc::UnboundedSender<()>,
+}
+
+pub struct ManualIntervalControl {
+    handle_receiver: mpsc::UnboundedReceiver<()>,
+    event_sender: mpsc::UnboundedSender<()>,
+}
+
+impl ManualIntervalControl {
+    pub fn next<'a>(&'a mut self) -> Pin<Box<dyn Future<Output=Option<()>> + 'a>> {
+        if let Err(_) = self.event_sender.unbounded_send(()) {
+            return futures::future::ready(None).boxed()
+        }
+        self.handle_receiver.next().boxed()
+    }
+}
+
+impl ManualSignalInterval {
+    /// New manual interval.
+    ///
+    /// Use
+    pub fn new() -> (Self, ManualIntervalControl) {
+        let (event_sender, event_receiver) = mpsc::unbounded();
+        let (handle_sender, handle_receiver) = mpsc::unbounded();
+        let back_signal = ManualSignalInterval {
+            event_receiver, handle_sender,
+        };
+        let control = ManualIntervalControl {
+            event_sender, handle_receiver,
+        };
+        (back_signal, control)
+    }
+}
+
+impl Stream for ManualSignalInterval {
+    type Item = BackSignalGuard;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = Pin::into_inner(self);
+        match Pin::new(&mut this.event_receiver).poll_next(cx) {
+            Poll::Ready(Some(_)) => {
+                let guard = BackSignalGuard { sender: Some(this.handle_sender.clone()) };
+                Poll::Ready(Some(guard))
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl IntoStream for ManualSignalInterval {
+    type Guard = BackSignalGuard;
+
+    fn into_stream(self) -> Box<dyn Stream<Item=Self::Guard> + Unpin + Send> {
+        Box::new(self)
     }
 }
 
@@ -123,5 +182,18 @@ mod tests {
             assert_eq!(change_this.load(AtomicOrdering::SeqCst), true);
             let _ = exit_sender.send(());
         });
+    }
+
+    #[test]
+    fn test_manual_interval() {
+        let (rythm, mut control) = ManualSignalInterval::new();
+        let change_this = Arc::new(AtomicBool::new(false));
+        let (_, exit_receiver) = oneshot::channel();
+        let background_thread = futures::executor::ThreadPool::new().unwrap();
+        background_thread.spawn_ok(run_test(rythm, exit_receiver, change_this.clone()));
+
+        futures::executor::block_on(control.next());
+
+        assert_eq!(change_this.load(AtomicOrdering::SeqCst), true);
     }
 }
