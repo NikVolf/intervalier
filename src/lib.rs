@@ -75,15 +75,30 @@ impl IntoStream for BackSignalInterval {
     }
 }
 
+/// This serves to control how timer events are handled on the receiving side.
+pub struct BackSignalControl(mpsc::UnboundedReceiver<()>);
+
+impl BackSignalControl {
+    /// Clear all accumulated haNdled timer events.
+    pub fn clear(&mut self) {
+        while self.0.next().now_or_never().is_some() { }
+    }
+
+    /// Next handled timer event.
+    pub fn next<'a>(&'a mut self) -> impl Future<Output=Option<()>> + 'a {
+        self.0.next()
+    }
+}
+
 impl BackSignalInterval {
     /// New interval with hanldling notification.
-    pub fn new(duration: Duration) -> (Self, mpsc::UnboundedReceiver<()>) {
+    pub fn new(duration: Duration) -> (Self, BackSignalControl) {
         let (sender, receiver) = mpsc::unbounded();
         let back_signal = BackSignalInterval {
             value: duration,
             sender: sender,
         };
-        (back_signal, receiver)
+        (back_signal, BackSignalControl(receiver))
     }
 }
 
