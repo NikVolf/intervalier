@@ -4,9 +4,9 @@ version = "0.3.0"
 authors = ["Nikolay Volf <nikvolf@gmail.com>"]
 edition = "2018"
 description = "Interval events with handling notifications"
-repository = "https://github.com/nikvolf/intrvallier"
-homepage = "https://github.com/nikvolf/intrvallier"
-license-file = "LICENSE"
+repository = "https://github.com/NikVolf/intervalier"
+homepage = "https://github.com/NikVolf/intervalier"
+license = "MIT OR Apache-2.0"
 keywords = ["futures", "timer", "async"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
