@@ -88,6 +88,12 @@ impl BackSignalControl {
     pub fn next<'a>(&'a mut self) -> impl Future<Output=Option<()>> + 'a {
         self.0.next()
     }
+
+    /// Next handled timer event.
+    pub fn next_blocking<'a>(&'a mut self) -> impl Future<Output=Option<()>> + 'a {
+        self.clear();
+        self.0.next()
+    }
 }
 
 impl BackSignalInterval {
@@ -124,7 +130,7 @@ impl ManualIntervalControl {
 impl ManualSignalInterval {
     /// New manual interval.
     ///
-    /// Use
+    /// Use this when you want to control how often your timer fires.
     pub fn new() -> (Self, ManualIntervalControl) {
         let (event_sender, event_receiver) = mpsc::unbounded();
         let (handle_sender, handle_receiver) = mpsc::unbounded();
@@ -195,6 +201,21 @@ mod tests {
 
         futures::executor::block_on(async move {
             rythm_receiver.next().await;
+            assert_eq!(change_this.load(AtomicOrdering::SeqCst), true);
+            let _ = exit_sender.send(());
+        });
+    }
+
+    #[test]
+    fn test_back_signal_blocking() {
+        let (rythm, mut rythm_receiver) = BackSignalInterval::new(std::time::Duration::from_millis(100));
+        let change_this = Arc::new(AtomicBool::new(false));
+        let (exit_sender, exit_receiver) = oneshot::channel();
+        let background_thread = futures::executor::ThreadPool::new().unwrap();
+        background_thread.spawn_ok(run_test(rythm, exit_receiver, change_this.clone()));
+
+        futures::executor::block_on(async move {
+            rythm_receiver.next_blocking().await;
             assert_eq!(change_this.load(AtomicOrdering::SeqCst), true);
             let _ = exit_sender.send(());
         });
