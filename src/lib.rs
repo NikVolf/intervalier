@@ -209,7 +209,7 @@ mod tests {
         }
     }
 
-    pub const TEST_CONDITION: AtomicUsize = AtomicUsize::new(0);
+    pub static TEST_CONDITION: AtomicUsize = AtomicUsize::new(0);
 
     async fn run_test_conditional<R: IntoStream>(rythm: R, exit: oneshot::Receiver<()>, change_this: Arc<AtomicBool>)
     {
@@ -230,6 +230,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    async fn set_10_after_some_time() {
+        Delay::new(Duration::from_millis(200)).await;
+        TEST_CONDITION.store(10, AtomicOrdering::SeqCst);
     }
 
     #[test]
@@ -268,13 +273,18 @@ mod tests {
         let change_this = Arc::new(AtomicBool::new(false));
         let (exit_sender, exit_receiver) = oneshot::channel();
         let background_thread = futures::executor::ThreadPool::new().unwrap();
-        background_thread.spawn_ok(run_test(rythm, exit_receiver, change_this.clone()));
+
+        background_thread.spawn_ok(run_test_conditional(rythm, exit_receiver, change_this.clone()));
+
+        background_thread.spawn_ok(set_10_after_some_time());
 
         futures::executor::block_on(async move {
             rythm_receiver.next_blocking().await;
             assert_eq!(change_this.load(AtomicOrdering::SeqCst), true);
             let _ = exit_sender.send(());
         });
+
+        assert_eq!(TEST_CONDITION.load(AtomicOrdering::SeqCst), 10);
     }
 
     #[test]
