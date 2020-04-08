@@ -4,9 +4,18 @@ use futures_timer::Delay;
 
 /// Something that can produce stream of events.
 pub trait IntoStream {
-    type Guard;
+    type Guard: Guard;
     fn into_stream(self) -> Box<dyn Stream<Item=Self::Guard> + Unpin + Send>;
 }
+
+pub trait Guard {
+    fn skip(&mut self) {
+        // By default, noop
+        // For test code, this can be used to control firing of events.`
+    }
+}
+
+impl Guard for () { }
 
 /// Interval that produces stream of `()` events.
 pub struct Interval {
@@ -39,13 +48,22 @@ impl IntoStream for Interval {
 /// that cretated `BackSignalInterval`.
 pub struct BackSignalGuard {
     sender: Option<mpsc::UnboundedSender<()>>,
+    skip: bool,
 }
 
 impl Drop for BackSignalGuard {
     fn drop(&mut self) {
-        let _ = self.sender.take()
-            .expect("Drop cannot be called twice, and BackSignalGuard never created without sender")
-            .unbounded_send(());
+        if !self.skip {
+            let _ = self.sender.take()
+                .expect("Drop cannot be called twice, and BackSignalGuard never created without sender")
+                .unbounded_send(());
+        }
+    }
+}
+
+impl Guard for BackSignalGuard {
+    fn skip(&mut self) {
+        self.skip = true;
     }
 }
 
@@ -67,7 +85,7 @@ impl IntoStream for BackSignalInterval {
         Box::new(
             unfold(sender, move |sender| {
                 Delay::new(value).map(|_| {
-                    let back_signal_guard = BackSignalGuard { sender: Some(sender.clone()) };
+                    let back_signal_guard = BackSignalGuard { sender: Some(sender.clone()), skip: false };
                     Some((back_signal_guard, sender))
                 })
             })
@@ -150,7 +168,7 @@ impl Stream for ManualSignalInterval {
         let this = Pin::into_inner(self);
         match Pin::new(&mut this.event_receiver).poll_next(cx) {
             Poll::Ready(Some(_)) => {
-                let guard = BackSignalGuard { sender: Some(this.handle_sender.clone()) };
+                let guard = BackSignalGuard { sender: Some(this.handle_sender.clone()), skip: false };
                 Poll::Ready(Some(guard))
             },
             Poll::Ready(None) => Poll::Ready(None),
@@ -172,7 +190,7 @@ mod tests {
 
     use super::*;
     use futures::channel::oneshot;
-    use std::sync::{Arc, atomic::{AtomicBool, Ordering as AtomicOrdering}};
+    use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering}};
 
     async fn run_test<R: IntoStream>(rythm: R, exit: oneshot::Receiver<()>, change_this: Arc<AtomicBool>) {
         let interval = rythm.into_stream().fuse();
@@ -183,6 +201,29 @@ mod tests {
                 _ = interval.next() => {
                     futures_timer::Delay::new(Duration::from_millis(100)).await;
                     change_this.store(true, AtomicOrdering::SeqCst);
+                },
+                _ = exit => {
+                    break;
+                }
+            }
+        }
+    }
+
+    pub const TEST_CONDITION: AtomicUsize = AtomicUsize::new(0);
+
+    async fn run_test_conditional<R: IntoStream>(rythm: R, exit: oneshot::Receiver<()>, change_this: Arc<AtomicBool>)
+    {
+        let interval = rythm.into_stream().fuse();
+        let exit = exit.fuse();
+        futures::pin_mut!(interval, exit);
+        loop {
+            futures::select! {
+                guard = interval.next() => {
+                    futures_timer::Delay::new(Duration::from_millis(100)).await;
+                    change_this.store(true, AtomicOrdering::SeqCst);
+                    if TEST_CONDITION.load(AtomicOrdering::SeqCst) == 0 {
+                        guard.expect("guard can never be None").skip();
+                    }
                 },
                 _ = exit => {
                     break;
@@ -208,6 +249,21 @@ mod tests {
 
     #[test]
     fn test_back_signal_blocking() {
+        let (rythm, mut rythm_receiver) = BackSignalInterval::new(std::time::Duration::from_millis(100));
+        let change_this = Arc::new(AtomicBool::new(false));
+        let (exit_sender, exit_receiver) = oneshot::channel();
+        let background_thread = futures::executor::ThreadPool::new().unwrap();
+        background_thread.spawn_ok(run_test(rythm, exit_receiver, change_this.clone()));
+
+        futures::executor::block_on(async move {
+            rythm_receiver.next_blocking().await;
+            assert_eq!(change_this.load(AtomicOrdering::SeqCst), true);
+            let _ = exit_sender.send(());
+        });
+    }
+
+    #[test]
+    fn test_back_signal_blocking_with_skip() {
         let (rythm, mut rythm_receiver) = BackSignalInterval::new(std::time::Duration::from_millis(100));
         let change_this = Arc::new(AtomicBool::new(false));
         let (exit_sender, exit_receiver) = oneshot::channel();
